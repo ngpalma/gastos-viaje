@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="es" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Gastos de Viaje</title>
+
+  <!-- PWA & Mobile Meta Tags -->
+  <meta name="theme-color" content="#020617" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="GastosViaje" />
+  <meta name="description" content="Divisor inteligente de gastos de viaje entre amigos" />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- React 18 & Babel CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #020617;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #1e293b;
+      border-radius: 9999px;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen selection:bg-indigo-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    const CATEGORIES = [
+      { id: "comida", name: "Comida / Salidas", icon: "🍔" },
+      { id: "combustible", name: "Combustible", icon: "⛽" },
+      { id: "hospedaje", name: "Hospedaje", icon: "🏠" },
+      { id: "super", name: "Supermercado", icon: "🛒" },
+      { id: "actividades", name: "Peajes / Paseos", icon: "🎟️" },
+      { id: "otros", name: "Otros", icon: "📦" },
+    ];
+
+    const CURRENCIES = ["ARS", "USD", "EUR", "BRL", "CLP"];
+
+    const INITIAL_FRIENDS = [
+      { name: "Amigo 1", alias: "" },
+      { name: "Amigo 2", alias: "" },
+      { name: "Amigo 3", alias: "" },
+      { name: "Amigo 4", alias: "" },
+      { name: "Amigo 5", alias: "" },
+      { name: "Amigo 6", alias: "" },
+      { name: "Amigo 7", alias: "" },
+    ];
+
+    const DEFAULT_DATA = {
+      pin: "",
+      baseCurrency: "ARS",
+      rates: { ARS: 1, USD: 1250, EUR: 1350, BRL: 230, CLP: 1.3 },
+      friends: INITIAL_FRIENDS,
+      expenses: [],
+      settledPayments: []
+    };
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+      }
+      return new Promise((resolve, reject) => {
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          textArea.remove();
+          resolve();
+        } catch (err) {
+          textArea.remove();
+          reject(err);
+        }
+      });
+    }
+
+    function encodePayload(obj) {
+      return btoa(encodeURIComponent(JSON.stringify(obj)));
+    }
+
+    function decodePayload(str) {
+      return JSON.parse(decodeURIComponent(atob(str)));
+    }
+
+    function App() {
+      const [friends, setFriends] = useState(DEFAULT_DATA.friends);
+      const [expenses, setExpenses] = useState(DEFAULT_DATA.expenses);
+      const [settledPayments, setSettledPayments] = useState(DEFAULT_DATA.settledPayments);
+      const [baseCurrency, setBaseCurrency] = useState(DEFAULT_DATA.baseCurrency);
+      const [rates, setRates] = useState(DEFAULT_DATA.rates);
+      const [pin, setPin] = useState(DEFAULT_DATA.pin);
+
+      const [roomId, setRoomId] = useState(() => localStorage.getItem("viaje_cloud_room_id") || "");
+      const [enteredPin, setEnteredPin] = useState(() => localStorage.getItem("viaje_cloud_pin") || "");
+      const [syncStatus, setSyncStatus] = useState("Local");
+      const [isSyncing, setIsSyncing] = useState(false);
+      const [notification, setNotification] = useState("");
+
+      const [desc, setDesc] = useState("");
+      const [amount, setAmount] = useState("");
+      const [currency, setCurrency] = useState(DEFAULT_DATA.baseCurrency);
+      const [category, setCategory] = useState("comida");
+      const [payer, setPayer] = useState(INITIAL_FRIENDS[0].name);
+      const [splitWith, setSplitWith] = useState(INITIAL_FRIENDS.map(f => f.name));
+
+      const [filterCategory, setFilterCategory] = useState("todas");
+      const [filterPerson, setFilterPerson] = useState("todos");
+
+      const isInitialMount = useRef(true);
+
+      const showToast = (msg) => {
+        setNotification(msg);
+        setTimeout(() => setNotification(""), 3000);
+      };
+
+      const toBase = (val, curr) => {
+        const rateInArs = rates[curr] || 1;
+        const baseRateInArs = rates[baseCurrency] || 1;
+        return (val * rateInArs) / baseRateInArs;
+      };
+
+      useEffect(() => {
+        let loaded = false;
+        if (window.location.hash.startsWith("#data=")) {
+          try {
+            const raw = window.location.hash.replace("#data=", "");
+            const parsed = decodePayload(raw);
+            if (parsed.friends && parsed.expenses) {
+              setFriends(parsed.friends);
+              setExpenses(parsed.expenses);
+              setSettledPayments(parsed.settledPayments || []);
+              setBaseCurrency(parsed.baseCurrency || "ARS");
+              setRates(parsed.rates || DEFAULT_DATA.rates);
+              if (parsed.pin !== undefined) setPin(parsed.pin);
+              if (parsed.roomId) {
+                setRoomId(parsed.roomId);
+                localStorage.setItem("viaje_cloud_room_id", parsed.roomId);
+              }
+              setPayer(parsed.friends[0]?.name || "Amigo 1");
+              setSplitWith(parsed.friends.map(f => f.name));
+              showToast("✓ Datos cargados desde el link recibido");
+              loaded = true;
+            }
+          } catch (e) {
+            console.error("Error al decodificar URL hash:", e);
+          }
+        }
+
+        if (!loaded) {
+          const localData = localStorage.getItem("viaje_storage_v3");
+          if (localData) {
+            try {
+              const parsed = JSON.parse(localData);
+              if (parsed.friends) setFriends(parsed.friends);
+              if (parsed.expenses) setExpenses(parsed.expenses);
+              if (parsed.settledPayments) setSettledPayments(parsed.settledPayments);
+              if (parsed.baseCurrency) setBaseCurrency(parsed.baseCurrency);
+              if (parsed.rates) setRates(parsed.rates);
+              if (parsed.pin !== undefined) setPin(parsed.pin);
+              if (parsed.friends?.[0]?.name) {
+                setPayer(parsed.friends[0].name);
+                setSplitWith(parsed.friends.map(f => f.name));
+              }
+            } catch (err) {
+              console.error(err);
+            }
+          }
+
+          const savedRoom = localStorage.getItem("viaje_cloud_room_id");
+          if (savedRoom) {
+            fetchCloud(savedRoom, enteredPin);
+          }
+        }
+      }, []);
+
+      useEffect(() => {
+        const payload = { friends, expenses, settledPayments, baseCurrency, rates, pin, roomId };
+        localStorage.setItem("viaje_storage_v3", JSON.stringify(payload));
+
+        if (isInitialMount.current) {
+          isInitialMount.current = false;
+          return;
+        }
+
+        if (roomId.trim()) {
+          setSyncStatus("Guardando...");
+          const timer = setTimeout(async () => {
+            try {
+              const cloudRes = await fetch(`https://kvdb.io/4y2L2rM9xH5t9fEw3aBcde/${encodeURIComponent(roomId.trim().toLowerCase())}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+              });
+
+              if (cloudRes.ok) {
+                setSyncStatus("Sincronizado");
+              } else {
+                setSyncStatus("Guardado local (Red no disponible)");
+              }
+            } catch (err) {
+              setSyncStatus("Guardado local");
+            }
+          }, 1200);
+
+          return () => clearTimeout(timer);
+        }
+      }, [friends, expenses, settledPayments, baseCurrency, rates, pin, roomId]);
+
+      const fetchCloud = async (room, checkPin) => {
+        if (!room) return;
+        setIsSyncing(true);
+        setSyncStatus("Conectando...");
+        try {
+          const res = await fetch(`https://kvdb.io/4y2L2rM9xH5t9fEw3aBcde/${encodeURIComponent(room.trim().toLowerCase())}`);
+          if (res.status === 404) {
+            setSyncStatus("Sala creada (Nueva)");
+            setIsSyncing(false);
+            return;
+          }
+          if (res.ok) {
+            const data = await res.json();
+            if (data.pin && data.pin !== checkPin) {
+              setSyncStatus("PIN erróneo");
+              showToast("🔒 PIN de la sala incorrecto");
+              setIsSyncing(false);
+              return;
+            }
+            if (data.friends) setFriends(data.friends);
+            if (data.expenses) setExpenses(data.expenses);
+            if (data.settledPayments) setSettledPayments(data.settledPayments);
+            if (data.baseCurrency) setBaseCurrency(data.baseCurrency);
+            if (data.rates) setRates(data.rates);
+            if (data.pin !== undefined) setPin(data.pin);
+            setSyncStatus("Sincronizado");
+            showToast("✓ Datos cargados de la sala");
+          } else {
+            setSyncStatus("Guardado local");
+          }
+        } catch (err) {
+          setSyncStatus("Guardado local");
+        } finally {
+          setIsSyncing(false);
+        }
+      };
+
+      const handleShareLiveLink = () => {
+        const payload = { friends, expenses, settledPayments, baseCurrency, rates, pin, roomId };
+        const encoded = encodePayload(payload);
+        const fullUrl = `${window.location.origin}${window.location.pathname}#data=${encoded}`;
+
+        copyToClipboard(fullUrl).then(() => {
+          showToast("¡Enlace completo copiado! Pégalo en WhatsApp");
+        }).catch(() => {
+          prompt("Copia este enlace para enviar a tus amigos:", fullUrl);
+        });
+      };
+
+      const toggleParticipant = (friendName) => {
+        if (splitWith.includes(friendName)) {
+          if (splitWith.length === 1) return;
+          setSplitWith(splitWith.filter(f => f !== friendName));
+        } else {
+          setSplitWith([...splitWith, friendName]);
+        }
+      };
+
+      const selectAll = () => setSplitWith(friends.map(f => f.name));
+      const selectOthers = () => {
+        const others = friends.filter(f => f.name !== payer).map(f => f.name);
+        setSplitWith(others.length > 0 ? others : [payer]);
+      };
+
+      const handleAddExpense = (e) => {
+        e.preventDefault();
+        const parsedAmount = parseFloat(amount);
+        if (!desc.trim() || isNaN(parsedAmount) || parsedAmount <= 0) {
+          showToast("Ingresa un monto válido");
+          return;
+        }
+        if (splitWith.length === 0) {
+          showToast("Selecciona al menos un participante");
+          return;
+        }
+
+        const newExpense = {
+          id: "exp_" + Date.now().toString(),
+          desc: desc.trim(),
+          amount: parsedAmount,
+          currency,
+          category,
+          payer,
+          splitWith: [...splitWith],
+          date: new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+        };
+
+        setExpenses([newExpense, ...expenses]);
+        setDesc("");
+        setAmount("");
+        setSplitWith(friends.map(f => f.name));
+        showToast("✓ Gasto agregado");
+      };
+
+      const handleDeleteExpense = (id) => {
+        setExpenses(expenses.filter(e => e.id !== id));
+        showToast("Gasto eliminado");
+      };
+
+      const handleSettleDebt = (transfer) => {
+        const payment = {
+          id: "pay_" + Date.now().toString(),
+          from: transfer.from,
+          to: transfer.to,
+          amount: transfer.amount,
+          date: new Date().toLocaleDateString("es-AR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })
+        };
+        setSettledPayments([payment, ...settledPayments]);
+        showToast(`✓ Deuda de ${transfer.from} saldada`);
+      };
+
+      const handleUndoPayment = (id) => {
+        setSettledPayments(settledPayments.filter(p => p.id !== id));
+        showToast("Pago deshecho");
+      };
+
+      const handleCopyAlias = (name) => {
+        const friend = friends.find(f => f.name === name);
+        if (friend && friend.alias?.trim()) {
+          copyToClipboard(friend.alias.trim()).then(() => {
+            showToast(`¡Alias de ${name} copiado!`);
+          });
+        } else {
+          showToast(`No hay alias configurado para ${name}`);
+        }
+      };
+
+      const updateFriend = (index, field, value) => {
+        const oldName = friends[index].name;
+        const updated = [...friends];
+        updated[index] = { ...updated[index], [field]: value };
+        setFriends(updated);
+
+        if (field === "name") {
+          setExpenses(expenses.map(e => ({
+            ...e,
+            payer: e.payer === oldName ? value : e.payer,
+            splitWith: e.splitWith.map(s => s === oldName ? value : s)
+          })));
+          setSettledPayments(settledPayments.map(p => ({
+            ...p,
+            from: p.from === oldName ? value : p.from,
+            to: p.to === oldName ? value : p.to
+          })));
+          if (payer === oldName) setPayer(value);
+          setSplitWith(splitWith.map(s => s === oldName ? value : s));
+        }
+      };
+
+      const { totalSpentBase, categoryBreakdown, settlements } = useMemo(() => {
+        let total = 0;
+        const catMap = {};
+        const balanceMap = {};
+        friends.forEach(f => { balanceMap[f.name] = 0; });
+
+        expenses.forEach(e => {
+          const inBase = toBase(e.amount, e.currency);
+          total += inBase;
+          catMap[e.category] = (catMap[e.category] || 0) + inBase;
+
+          balanceMap[e.payer] = (balanceMap[e.payer] || 0) + inBase;
+          const share = inBase / (e.splitWith.length || 1);
+          e.splitWith.forEach(p => {
+            if (balanceMap[p] !== undefined) {
+              balanceMap[p] -= share;
+            }
+          });
+        });
+
+        settledPayments.forEach(p => {
+          if (balanceMap[p.from] !== undefined) balanceMap[p.from] += p.amount;
+          if (balanceMap[p.to] !== undefined) balanceMap[p.to] -= p.amount;
+        });
+
+        const debtors = [];
+        const creditors = [];
+
+        Object.keys(balanceMap).forEach(name => {
+          const net = balanceMap[name];
+          if (net < -0.01) debtors.push({ name, net: Math.abs(net) });
+          else if (net > 0.01) creditors.push({ name, net });
+        });
+
+        debtors.sort((a, b) => b.net - a.net);
+        creditors.sort((a, b) => b.net - a.net);
+
+        const transfers = [];
+        let i = 0, j = 0;
+        while (i < debtors.length && j < creditors.length) {
+          const deb = debtors[i];
+          const cred = creditors[j];
+          const amountTransfer = Math.min(deb.net, cred.net);
+
+          if (amountTransfer > 0.01) {
+            transfers.push({
+              from: deb.name,
+              to: cred.name,
+              amount: amountTransfer
+            });
+          }
+
+          deb.net -= amountTransfer;
+          cred.net -= amountTransfer;
+
+          if (deb.net <= 0.01) i++;
+          if (cred.net <= 0.01) j++;
+        }
+
+        return {
+          totalSpentBase: total,
+          categoryBreakdown: catMap,
+          settlements: transfers
+        };
+      }, [friends, expenses, settledPayments, baseCurrency, rates]);
+
+      const handleShareWhatsApp = () => {
+        const lineSep = "%0A";
+        let text = `✈️ *RESUMEN DE GASTOS DEL VIAJE*${lineSep}`;
+        text += `💰 *Gasto Total:* $${totalSpentBase.toLocaleString("es-AR", { maximumFractionDigits: 0 })} ${baseCurrency}${lineSep}${lineSep}`;
+
+        text += `📊 *Por Categoría:*${lineSep}`;
+        CATEGORIES.forEach(c => {
+          const spent = categoryBreakdown[c.id] || 0;
+          if (spent > 0) {
+            text += `• ${c.icon} ${c.name}: $${spent.toLocaleString("es-AR", { maximumFractionDigits: 0 })} ${baseCurrency}${lineSep}`;
+          }
+        });
+
+        text += `${lineSep}⚖️ *TRANSFERENCIAS PENDIENTES:*${lineSep}`;
+        if (settlements.length === 0) {
+          text += `🎉 ¡Están todos al día! No hay deudas pendientes.${lineSep}`;
+        } else {
+          settlements.forEach(s => {
+            const receiver = friends.find(f => f.name === s.to);
+            const aliasInfo = receiver?.alias ? ` (Alias: *${receiver.alias}*)` : "";
+            text += `👉 *${s.from}* le transfiere a *${s.to}*: $${s.amount.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${baseCurrency}${aliasInfo}${lineSep}`;
+          });
+        }
+
+        const payload = { friends, expenses, settledPayments, baseCurrency, rates, pin, roomId };
+        const encoded = encodePayload(payload);
+        const link = `${window.location.origin}${window.location.pathname}#data=${encoded}`;
+        text += `${lineSep}📲 *Abrir app con todos los gastos:*${lineSep}${link}`;
+
+        window.open(`https://api.whatsapp.com/send?text=${text}`, "_blank");
+      };
+
+      const handleExportCSV = () => {
+        if (expenses.length === 0 && settledPayments.length === 0) {
+          showToast("No hay registros para exportar");
+          return;
+        }
+
+        const headers = ["Tipo", "Fecha", "Descripción", "Categoría", "Pagado Por", "Participantes", "Monto Original", "Moneda", `Monto en ${baseCurrency}`];
+        const rows = expenses.map(e => [
+          "GASTO",
+          `"${e.date}"`,
+          `"${e.desc.replace(/"/g, '""')}"`,
+          CATEGORIES.find(c => c.id === e.category)?.name || "Otros",
+          `"${e.payer}"`,
+          `"${e.splitWith.join(", ")}"`,
+          e.amount.toFixed(2),
+          e.currency,
+          toBase(e.amount, e.currency).toFixed(2)
+        ]);
+
+        settledPayments.forEach(p => {
+          rows.push([
+            "PAGO SALDADO",
+            `"${p.date}"`,
+            `"Saldado de ${p.from} a ${p.to}"`,
+            "Liquidación",
+            `"${p.from}"`,
+            `"${p.to}"`,
+            p.amount.toFixed(2),
+            baseCurrency,
+            p.amount.toFixed(2)
+          ]);
+        });
+
+        const csvString = "\uFEFF" + [headers.join(";"), ...rows.map(r => r.join(";"))].join("\r\n");
+        const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `gastos_viaje_${roomId || "amigos"}_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+        showToast("Archivo CSV descargado");
+      };
+
+      const handleConnectRoom = (e) => {
+        e.preventDefault();
+        const cleanRoom = roomId.trim().toLowerCase();
+        localStorage.setItem("viaje_cloud_room_id", cleanRoom);
+        localStorage.setItem("viaje_cloud_pin", enteredPin.trim());
+        if (cleanRoom) {
+          fetchCloud(cleanRoom, enteredPin.trim());
+        }
+      };
+
+      const filteredExpenses = useMemo(() => {
+        return expenses.filter(e => {
+          const matchCat = filterCategory === "todas" || e.category === filterCategory;
+          const matchPerson = filterPerson === "todos" || e.payer === filterPerson || e.splitWith.includes(filterPerson);
+          return matchCat && matchPerson;
+        });
+      }, [expenses, filterCategory, filterPerson]);
+
+      return (
+        <div className="max-w-2xl mx-auto px-4 pt-6 pb-20">
+          {notification && (
+            <div className="fixed bottom-6 right-6 z-50 bg-indigo-600 text-white font-semibold text-xs sm:text-sm px-4 py-2.5 rounded-xl shadow-2xl border border-indigo-400/40">
+              {notification}
+            </div>
+          )}
+
+          {/* Header */}
+          <header className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 mb-6 border-b border-slate-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">🗺️</span>
+                <h1 className="text-2xl font-extrabold tracking-tight text-white">Gastos de Viaje</h1>
+                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                  syncStatus === "Sincronizado" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" : "bg-slate-800 text-slate-400 border-slate-700"
+                }`}>
+                  {isSyncing ? "Sincronizando..." : syncStatus}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-400 mt-1">
+                Total acumulado: <strong className="text-emerald-400 font-bold">${totalSpentBase.toLocaleString("es-AR", { maximumFractionDigits: 0 })} {baseCurrency}</strong>
+                {" "}• ({friends.length > 0 ? (totalSpentBase / friends.length).toLocaleString("es-AR", { maximumFractionDigits: 0 }) : 0} {baseCurrency} c/u)
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleShareLiveLink}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                <span>🔗</span> Copiar link con datos
+              </button>
+              <button
+                type="button"
+                onClick={handleShareWhatsApp}
+                className="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3 py-2 rounded-xl text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95"
+              >
+                <span>💬</span> WhatsApp
+              </button>
+              <button
+                type="button"
+                onClick={handleExportCSV}
+                className="bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 font-medium px-3 py-2 rounded-xl text-xs transition-all active:scale-95"
+              >
+                CSV
+              </button>
+            </div>
+          </header>
+
+          {/* Sincronización Sala y PIN */}
+          <details className="mb-4 bg-slate-900/60 rounded-2xl p-4 border border-slate-800/80 shadow-sm">
+            <summary className="font-semibold text-xs text-slate-300 cursor-pointer select-none flex justify-between items-center">
+              <span className="flex items-center gap-1.5">
+                <span>☁️</span> Sala compartida en la nube (ID y PIN)
+              </span>
+              <span className="text-indigo-400 text-[11px] underline">
+                {roomId ? `Sala activa: ${roomId}` : "Configurar sala"}
+              </span>
+            </summary>
+            <form onSubmit={handleConnectRoom} className="mt-4 pt-3 border-t border-slate-800/80 space-y-3">
+              <p className="text-[11px] text-slate-400">
+                Pon un nombre de sala único (ej: <code>viaje-cordoba-2026</code>). También puedes usar el botón superior <strong>"Copiar link con datos"</strong> que siempre carga el 100% de la información sin depender de la red.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                <input
+                  type="text"
+                  placeholder="Nombre de la sala"
+                  value={roomId}
+                  onChange={(e) => setRoomId(e.target.value)}
+                  className="sm:col-span-7 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+                <input
+                  type="password"
+                  maxLength={4}
+                  placeholder="PIN (opcional)"
+                  value={enteredPin}
+                  onChange={(e) => {
+                    setEnteredPin(e.target.value);
+                    setPin(e.target.value);
+                  }}
+                  className="sm:col-span-3 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  type="submit"
+                  className="sm:col-span-2 bg-slate-800 hover:bg-slate-700 text-white font-medium py-2 rounded-xl text-xs transition-colors border border-slate-700"
+                >
+                  Conectar
+                </button>
+              </div>
+            </form>
+          </details>
+
+          {/* Participantes & Alias */}
+          <details className="mb-4 bg-slate-900/60 rounded-2xl p-4 border border-slate-800/80 shadow-sm">
+            <summary className="font-semibold text-xs text-slate-300 cursor-pointer select-none flex justify-between items-center">
+              <span className="flex items-center gap-1.5">
+                <span>👥</span> Nombres de los 7 amigos y Alias/CVU
+              </span>
+              <span className="text-slate-400 text-[11px]">Editar</span>
+            </summary>
+            <div className="mt-4 pt-3 border-t border-slate-800/80 space-y-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {friends.map((f, idx) => (
+                  <div key={idx} className="flex gap-1.5 bg-slate-950/70 p-1.5 rounded-xl border border-slate-800">
+                    <input
+                      type="text"
+                      value={f.name}
+                      placeholder="Nombre"
+                      onChange={(e) => updateFriend(idx, "name", e.target.value)}
+                      className="w-1/2 bg-transparent text-xs font-medium text-white px-2 py-1 focus:outline-none rounded"
+                    />
+                    <input
+                      type="text"
+                      value={f.alias}
+                      placeholder="Alias / CBU"
+                      onChange={(e) => updateFriend(idx, "alias", e.target.value)}
+                      className="w-1/2 bg-slate-900 border border-slate-800 text-[11px] text-emerald-400 px-2 py-1 rounded focus:outline-none focus:border-indigo-500 font-mono"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </details>
+
+          {/* Monedas y Cotizaciones */}
+          <details className="mb-6 bg-slate-900/60 rounded-2xl p-4 border border-slate-800/80 shadow-sm">
+            <summary className="font-semibold text-xs text-slate-300 cursor-pointer select-none flex justify-between items-center">
+              <span className="flex items-center gap-1.5">
+                <span>💱</span> Moneda base de división y Cotizaciones
+              </span>
+              <span className="text-xs bg-slate-800 text-indigo-300 px-2 py-0.5 rounded-lg border border-slate-700 font-semibold">
+                Base: {baseCurrency}
+              </span>
+            </summary>
+            <div className="mt-4 pt-3 border-t border-slate-800/80 space-y-3">
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-slate-400">Moneda de liquidación:</label>
+                <select
+                  value={baseCurrency}
+                  onChange={(e) => setBaseCurrency(e.target.value)}
+                  className="bg-slate-950 border border-slate-800 text-xs text-white rounded-lg px-3 py-1.5 focus:outline-none"
+                >
+                  {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              <div>
+                <p className="text-[11px] text-slate-400 mb-2">Equivalencias relativas en ARS:</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {CURRENCIES.filter(c => c !== "ARS").map(curr => (
+                    <div key={curr} className="bg-slate-950 p-2 rounded-xl border border-slate-800">
+                      <span className="text-[10px] text-slate-400 block">1 {curr} =</span>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-slate-500">$</span>
+                        <input
+                          type="number"
+                          value={rates[curr]}
+                          onChange={(e) => setRates({ ...rates, [curr]: parseFloat(e.target.value) || 0 })}
+                          className="w-full bg-transparent text-xs text-slate-200 focus:outline-none font-semibold"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </details>
+
+          {/* Formulario Cargar Gasto */}
+          <section className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-xl mb-8">
+            <h2 className="text-base font-bold text-white mb-4 flex items-center gap-2">
+              <span>➕</span> Cargar Nuevo Gasto
+            </h2>
+            <form onSubmit={handleAddExpense} className="space-y-4">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-400 block mb-1.5 uppercase tracking-wider">
+                  Categoría
+                </label>
+                <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                  {CATEGORIES.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => setCategory(c.id)}
+                      className={`flex flex-col items-center justify-center p-2 rounded-xl border text-xs transition-all ${
+                        category === c.id
+                          ? "bg-indigo-600/20 border-indigo-500 text-white font-semibold ring-1 ring-indigo-500"
+                          : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                      }`}
+                    >
+                      <span className="text-base mb-0.5">{c.icon}</span>
+                      <span className="text-[10px] truncate w-full text-center">{c.name.split("/")[0]}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+                <input
+                  type="text"
+                  placeholder="Descripción (ej. Asado, Nafta, Cervezas)"
+                  value={desc}
+                  onChange={(e) => setDesc(e.target.value)}
+                  className="sm:col-span-5 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  required
+                />
+                <div className="sm:col-span-4 flex">
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="Monto"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    className="w-2/3 bg-slate-950 border border-r-0 border-slate-800 rounded-l-xl px-3 py-2.5 text-xs text-white font-semibold focus:outline-none focus:border-indigo-500"
+                    required
+                  />
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                    className="w-1/3 bg-slate-900 border border-slate-800 rounded-r-xl px-2 py-2.5 text-xs font-bold text-indigo-400 focus:outline-none"
+                  >
+                    {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div className="sm:col-span-3">
+                  <select
+                    value={payer}
+                    onChange={(e) => setPayer(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    {friends.map((f) => (
+                      <option key={f.name} value={f.name}>Pagó: {f.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Checkboxes de división */}
+              <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
+                  <span className="text-[11px] font-semibold text-slate-300">
+                    Se divide entre: <strong className="text-indigo-400">{splitWith.length} de {friends.length}</strong>
+                  </span>
+                  <div className="flex gap-1.5">
+                    <button
+                      type="button"
+                      onClick={selectAll}
+                      className="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-700/60 px-2 py-1 rounded-lg text-indigo-300 transition-colors"
+                    >
+                      Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={selectOthers}
+                      className="text-[10px] bg-slate-900 hover:bg-slate-800 border border-slate-700/60 px-2 py-1 rounded-lg text-slate-300 transition-colors"
+                    >
+                      Restantes (sin {payer})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {friends.map((f) => {
+                    const checked = splitWith.includes(f.name);
+                    return (
+                      <label
+                        key={f.name}
+                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer border text-xs select-none transition-all ${
+                          checked
+                            ? "bg-indigo-950/40 border-indigo-500/50 text-white font-medium"
+                            : "bg-slate-900/30 border-slate-800/50 text-slate-500 hover:text-slate-300"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleParticipant(f.name)}
+                          className="rounded border-slate-700 bg-slate-950 text-indigo-600 focus:ring-0 h-3.5 w-3.5"
+                        />
+                        <span className="truncate">{f.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 active:scale-[0.99] text-white font-semibold py-2.5 rounded-xl text-xs sm:text-sm transition-all shadow-lg shadow-indigo-600/20"
+              >
+                Agregar Gasto al Viaje
+              </button>
+            </form>
+          </section>
+
+          {/* Liquidación de Deudas */}
+          <section className="mb-8 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4 sm:p-5 shadow-sm">
+            <h2 className="text-base font-bold text-white flex items-center gap-1.5 mb-1">
+              <span>⚖️</span> Deudas Pendientes
+            </h2>
+            <p className="text-[11px] text-slate-400 mb-3">Transferencias mínimas optimizadas en {baseCurrency}:</p>
+
+            {settlements.length === 0 ? (
+              <div className="bg-emerald-950/20 border border-emerald-800/40 p-4 rounded-xl text-center">
+                <span className="text-2xl block mb-1">🎉</span>
+                <p className="text-xs text-emerald-300 font-medium">¡Están todas las cuentas al día!</p>
+              </div>
+            ) : (
+              <ul className="space-y-2.5">
+                {settlements.map((s, idx) => {
+                  const receiver = friends.find(f => f.name === s.to);
+                  const hasAlias = receiver?.alias?.trim();
+
+                  return (
+                    <li
+                      key={idx}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-950 border border-slate-800/80 p-3.5 rounded-xl"
+                    >
+                      <div>
+                        <div className="text-xs text-slate-200">
+                          <strong className="text-rose-400">{s.from}</strong> le transfiere a <strong className="text-emerald-400">{s.to}</strong>
+                        </div>
+                        <div className="text-sm font-bold text-white mt-0.5">
+                          ${s.amount.toLocaleString("es-AR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {baseCurrency}
+                        </div>
+                        {hasAlias ? (
+                          <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1">
+                            <span>Alias:</span>
+                            <span className="font-mono text-emerald-400">{receiver.alias}</span>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      <div className="flex items-center gap-2 self-end sm:self-center">
+                        {hasAlias ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCopyAlias(s.to)}
+                            className="bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs px-2.5 py-1.5 rounded-lg transition-colors flex items-center gap-1"
+                          >
+                            <span>📋</span> Copiar Alias
+                          </button>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          onClick={() => handleSettleDebt(s)}
+                          className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
+                        >
+                          <span>✓</span> Ya pagó
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+
+          {/* Historial de Pagos Saldados */}
+          {settledPayments.length > 0 && (
+            <details className="mb-8 bg-slate-900/40 border border-slate-800 rounded-2xl p-4">
+              <summary className="font-semibold text-xs text-slate-400 cursor-pointer select-none flex justify-between items-center">
+                <span>Historial de Pagos Saldados ({settledPayments.length})</span>
+                <span className="text-indigo-400 text-[11px]">Ver / Deshacer</span>
+              </summary>
+              <ul className="mt-3 pt-3 border-t border-slate-800/80 space-y-2">
+                {settledPayments.map((p) => (
+                  <li key={p.id} className="flex justify-between items-center text-xs bg-slate-950/70 border border-slate-800/60 px-3 py-2 rounded-xl">
+                    <span className="text-slate-300">
+                      <strong className="text-emerald-400">{p.from}</strong> saldó a <strong className="text-emerald-400">{p.to}</strong>:{" "}
+                      <strong>${p.amount.toLocaleString("es-AR", { maximumFractionDigits: 2 })} {baseCurrency}</strong>{" "}
+                      <span className="text-[10px] text-slate-500">({p.date})</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleUndoPayment(p.id)}
+                      className="text-slate-500 hover:text-rose-400 text-xs px-2 py-0.5 rounded border border-slate-800 transition-colors"
+                    >
+                      Deshacer
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          {/* Historial de Gastos con Filtros */}
+          <section>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+              <h2 className="text-base font-bold text-white flex items-center gap-1.5">
+                <span>📋</span> Historial de Gastos ({filteredExpenses.length})
+              </h2>
+
+              <div className="flex gap-2">
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 text-[11px] text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none"
+                >
+                  <option value="todas">Todas las categorías</option>
+                  {CATEGORIES.map(c => <option key={c.id} value={c.id}>{c.icon} {c.name}</option>)}
+                </select>
+
+                <select
+                  value={filterPerson}
+                  onChange={(e) => setFilterPerson(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 text-[11px] text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none"
+                >
+                  <option value="todos">Todos los amigos</option>
+                  {friends.map(f => <option key={f.name} value={f.name}>{f.name}</option>)}
+                </select>
+              </div>
+            </div>
+
+            {filteredExpenses.length === 0 ? (
+              <div className="bg-slate-900/40 border border-slate-800/60 p-6 rounded-2xl text-center text-xs text-slate-500">
+                No hay gastos registrados que coincidan con el filtro.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {filteredExpenses.map((e) => {
+                  const catObj = CATEGORIES.find(c => c.id === e.category) || CATEGORIES[5];
+                  const inBase = toBase(e.amount, e.currency);
+                  const isAll = e.splitWith.length === friends.length;
+
+                  return (
+                    <div key={e.id} className="bg-slate-900/80 border border-slate-800/80 p-3.5 rounded-2xl">
+                      <div className="flex justify-between items-start gap-2 mb-2">
+                        <div className="flex items-start gap-2.5">
+                          <span className="text-xl p-1.5 rounded-xl bg-slate-950 border border-slate-800">
+                            {catObj.icon}
+                          </span>
+                          <div>
+                            <p className="font-semibold text-xs sm:text-sm text-white">{e.desc}</p>
+                            <p className="text-[11px] text-slate-400">
+                              Pagó <strong className="text-slate-200">{e.payer}</strong> • {e.date}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <p className="font-bold text-xs sm:text-sm text-emerald-400">
+                              ${e.amount.toLocaleString("es-AR")} {e.currency}
+                            </p>
+                            {e.currency !== baseCurrency && (
+                              <p className="text-[10px] text-slate-500">
+                                ≈ ${inBase.toLocaleString("es-AR", { maximumFractionDigits: 1 })} {baseCurrency}
+                              </p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteExpense(e.id)}
+                            className="text-slate-500 hover:text-rose-400 bg-slate-950 p-1.5 rounded-lg border border-slate-800 text-xs transition-colors"
+                            title="Eliminar gasto"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span>Para:</span>
+                          {isAll ? (
+                            <span className="bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-indigo-300 font-medium">
+                              Todos ({friends.length})
+                            </span>
+                          ) : (
+                            e.splitWith.map(person => (
+                              <span key={person} className="bg-slate-950 border border-slate-800/80 px-1.5 py-0.5 rounded-md text-slate-300">
+                                {person}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                        <span className="text-slate-500 font-mono">
+                          ${(inBase / (e.splitWith.length || 1)).toFixed(0)} {baseCurrency}/u
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
