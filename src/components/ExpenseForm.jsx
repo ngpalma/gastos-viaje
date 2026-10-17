@@ -73,10 +73,18 @@ export default function ExpenseForm({ friends, baseCurrency, onAdd, onToast }) {
   };
 
   return (
-    <section className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-xl mb-8">
-      <h2 className="text-base font-bold text-white mb-4 flex items-center gap-2">
-        <span>➕</span> Cargar Nuevo Gasto
-      </h2>
+    <details
+      open
+      className="bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-800 shadow-xl mb-8"
+    >
+      <summary className="cursor-pointer select-none list-none flex items-center justify-between gap-2 mb-4">
+        <h2 className="text-base font-bold text-white flex items-center gap-2">
+          <span>➕</span> Cargar Nuevo Gasto
+        </h2>
+        <span className="text-indigo-400 text-[11px] underline shrink-0">
+          Mostrar / ocultar
+        </span>
+      </summary>
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Categoría */}
         <div>
@@ -210,6 +218,6 @@ export default function ExpenseForm({ friends, baseCurrency, onAdd, onToast }) {
           Agregar Gasto al Viaje
         </button>
       </form>
-    </section>
+    </details>
   );
 }

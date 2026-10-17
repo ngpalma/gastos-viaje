@@ -47,7 +47,7 @@ export default function App() {
     [friends]
   );
 
-  const { totalSpentBase, settlements } = useMemo(
+  const { totalSpentBase, settlements, members } = useMemo(
     () => computeSummary({ friends, expenses, settledPayments, rates, baseCurrency }),
     [friends, expenses, settledPayments, rates, baseCurrency]
   );
@@ -233,6 +233,7 @@ export default function App() {
 
       <Settlements
         settlements={settlements}
+        members={members}
         getFriend={getFriend}
         baseCurrency={baseCurrency}
         onSettle={settleDebt}

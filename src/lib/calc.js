@@ -11,8 +11,14 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
   let total = 0;
   const catMap = {};
   const balanceMap = {};
+  const paidMap = {};
+  const owesMap = {};
+  const itemsMap = {}; // friendId -> [{ id, desc, category, owe, paid, net }]
   friends.forEach((f) => {
     balanceMap[f.id] = 0;
+    paidMap[f.id] = 0;
+    owesMap[f.id] = 0;
+    itemsMap[f.id] = [];
   });
 
   expenses.forEach((e) => {
@@ -23,12 +29,30 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
     // El que pagó queda "a favor" por el total.
     if (balanceMap[e.payerId] !== undefined) {
       balanceMap[e.payerId] += inBase;
+      paidMap[e.payerId] += inBase;
     }
     // Se reparte el gasto entre los participantes.
     const participants = e.splitWith.filter((id) => balanceMap[id] !== undefined);
     const share = inBase / (participants.length || 1);
     participants.forEach((id) => {
       balanceMap[id] -= share;
+      owesMap[id] += share;
+    });
+
+    // Detalle por integrante: involucrados = participantes ∪ pagador.
+    const involved = new Set(participants);
+    if (balanceMap[e.payerId] !== undefined) involved.add(e.payerId);
+    involved.forEach((id) => {
+      const owe = participants.includes(id) ? share : 0;
+      const paid = id === e.payerId ? inBase : 0;
+      itemsMap[id].push({
+        id: e.id,
+        desc: e.desc,
+        category: e.category,
+        owe,
+        paid,
+        net: paid - owe,
+      });
     });
   });
 
@@ -37,6 +61,17 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
     if (balanceMap[p.fromId] !== undefined) balanceMap[p.fromId] += p.amount;
     if (balanceMap[p.toId] !== undefined) balanceMap[p.toId] -= p.amount;
   });
+
+  // Saldo neto por integrante (incluye pagos ya saldados).
+  const members = friends.map((f) => ({
+    id: f.id,
+    name: f.name,
+    alias: f.alias,
+    paid: paidMap[f.id] || 0,
+    owes: owesMap[f.id] || 0,
+    net: balanceMap[f.id] || 0,
+    items: itemsMap[f.id] || [],
+  }));
 
   const debtors = [];
   const creditors = [];
@@ -67,7 +102,12 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
     if (cred.net <= 0.01) j++;
   }
 
-  return { totalSpentBase: total, categoryBreakdown: catMap, settlements: transfers };
+  return {
+    totalSpentBase: total,
+    categoryBreakdown: catMap,
+    settlements: transfers,
+    members,
+  };
 }
 
 // Devuelve true si un integrante aparece en algún gasto o pago (no se puede eliminar en ese caso).

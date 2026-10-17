@@ -123,27 +123,43 @@ export default function ExpenseList({
                   </div>
                 </div>
 
-                <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
-                  <div className="flex flex-wrap items-center gap-1">
-                    <span>Para:</span>
-                    {isAll ? (
-                      <span className="bg-slate-950 border border-slate-800 px-2 py-0.5 rounded-md text-indigo-300 font-medium">
-                        Todos ({friends.length})
-                      </span>
-                    ) : (
-                      e.splitWith.map((id) => (
+                <div className="pt-2 border-t border-slate-800/60">
+                  <div className="flex items-center justify-between gap-1 text-[10px] text-slate-500 mb-1.5">
+                    <span>
+                      División entre {e.splitWith.length}
+                      {isAll ? ` (todos)` : ``}:
+                    </span>
+                    <span className="font-mono">
+                      ${(inBase / (e.splitWith.length || 1)).toLocaleString("es-AR", {
+                        maximumFractionDigits: 0,
+                      })}{" "}
+                      {baseCurrency} c/u
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {e.splitWith.map((id) => {
+                      const share = inBase / (e.splitWith.length || 1);
+                      const isPayer = id === e.payerId;
+                      return (
                         <span
                           key={id}
-                          className="bg-slate-950 border border-slate-800/80 px-1.5 py-0.5 rounded-md text-slate-300"
+                          className={`px-1.5 py-0.5 rounded-md text-[10px] border flex items-center gap-1 ${
+                            isPayer
+                              ? "bg-indigo-950/40 border-indigo-700/50 text-indigo-200"
+                              : "bg-slate-950 border-slate-800/80 text-slate-300"
+                          }`}
                         >
-                          {getFriend(id)?.name || "—"}
+                          <span className="truncate max-w-[90px]">
+                            {getFriend(id)?.name || "—"}
+                            {isPayer ? " 💳" : ""}
+                          </span>
+                          <span className="font-mono font-semibold text-rose-300/90">
+                            ${share.toLocaleString("es-AR", { maximumFractionDigits: 0 })}
+                          </span>
                         </span>
-                      ))
-                    )}
+                      );
+                    })}
                   </div>
-                  <span className="text-slate-500 font-mono">
-                    ${(inBase / (e.splitWith.length || 1)).toFixed(0)} {baseCurrency}/u
-                  </span>
                 </div>
               </div>
             );
