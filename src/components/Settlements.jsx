@@ -32,7 +32,7 @@ export default function Settlements({
 
         {/* Transferencias sugeridas */}
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-2">
-          Transferencias sugeridas (mínimas) en {baseCurrency}
+          Quién le paga a quién en {baseCurrency}
         </h3>
 
         {settlements.length === 0 ? (

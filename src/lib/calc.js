@@ -73,34 +73,48 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
     items: itemsMap[f.id] || [],
   }));
 
-  const debtors = [];
-  const creditors = [];
-  Object.keys(balanceMap).forEach((id) => {
-    const net = balanceMap[id];
-    if (net < -0.01) debtors.push({ id, net: Math.abs(net) });
-    else if (net > 0.01) creditors.push({ id, net });
+  // Deudas DIRECTAS por par: cada integrante le debe a quien pagó, según los
+  // gastos que realmente compartieron (no se reenrutan deudas entre terceros).
+  const validIds = new Set(friends.map((f) => f.id));
+  const pairMap = {}; // `${deudorId}|${acreedorId}` -> monto que el deudor le debe al acreedor
+  expenses.forEach((e) => {
+    if (!validIds.has(e.payerId)) return;
+    const inBase = toBase(e.amount, e.currency, rates, baseCurrency);
+    const participants = e.splitWith.filter((id) => validIds.has(id));
+    const share = inBase / (participants.length || 1);
+    participants.forEach((id) => {
+      if (id === e.payerId) return; // nadie se debe a sí mismo
+      const key = `${id}|${e.payerId}`;
+      pairMap[key] = (pairMap[key] || 0) + share;
+    });
   });
 
-  debtors.sort((a, b) => b.net - a.net);
-  creditors.sort((a, b) => b.net - a.net);
+  // Pagos ya saldados, acumulados por par (deudor -> acreedor).
+  const settledByPair = {};
+  settledPayments.forEach((p) => {
+    const key = `${p.fromId}|${p.toId}`;
+    settledByPair[key] = (settledByPair[key] || 0) + p.amount;
+  });
 
+  // Neteamos ida y vuelta de cada par y restamos lo ya pagado.
   const transfers = [];
-  let i = 0;
-  let j = 0;
-  while (i < debtors.length && j < creditors.length) {
-    const deb = debtors[i];
-    const cred = creditors[j];
-    const amount = Math.min(deb.net, cred.net);
+  const handled = new Set();
+  Object.keys(pairMap).forEach((key) => {
+    if (handled.has(key)) return;
+    const [a, b] = key.split("|");
+    const reverse = `${b}|${a}`;
+    handled.add(key);
+    handled.add(reverse);
 
-    if (amount > 0.01) {
-      transfers.push({ fromId: deb.id, toId: cred.id, amount });
-    }
+    let net = (pairMap[key] || 0) - (pairMap[reverse] || 0); // >0: a le debe a b
+    net -= settledByPair[key] || 0;
+    net += settledByPair[reverse] || 0;
 
-    deb.net -= amount;
-    cred.net -= amount;
-    if (deb.net <= 0.01) i++;
-    if (cred.net <= 0.01) j++;
-  }
+    if (net > 0.01) transfers.push({ fromId: a, toId: b, amount: net });
+    else if (net < -0.01) transfers.push({ fromId: b, toId: a, amount: -net });
+  });
+
+  transfers.sort((x, y) => y.amount - x.amount);
 
   return {
     totalSpentBase: total,
