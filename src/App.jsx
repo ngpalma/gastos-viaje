@@ -146,9 +146,6 @@ export default function App() {
     showToast("Archivo CSV descargado");
   };
 
-  const perHead =
-    friends.length > 0 ? totalSpentBase / friends.length : 0;
-
   return (
     <div className="max-w-2xl mx-auto px-4 pt-6 pb-20">
       <Toast message={notification} />
@@ -176,9 +173,7 @@ export default function App() {
             <strong className="text-emerald-400 font-bold">
               ${totalSpentBase.toLocaleString("es-AR", { maximumFractionDigits: 0 })}{" "}
               {baseCurrency}
-            </strong>{" "}
-            • ({perHead.toLocaleString("es-AR", { maximumFractionDigits: 0 })}{" "}
-            {baseCurrency} c/u)
+            </strong>
           </p>
         </div>
 
