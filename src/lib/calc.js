@@ -116,10 +116,41 @@ export function computeSummary({ friends, expenses, settledPayments, rates, base
 
   transfers.sort((x, y) => y.amount - x.amount);
 
+  // Alternativa OPTIMIZADA: menos transferencias, pero cada integrante paga
+  // (o recibe) exactamente su saldo neto total. Nadie paga de más; la única
+  // diferencia es que podés terminar pagándole a alguien con quien no
+  // compartiste un gasto puntual. Se calcula sobre una copia del saldo neto.
+  const debtors = [];
+  const creditors = [];
+  friends.forEach((f) => {
+    const net = balanceMap[f.id] || 0;
+    if (net < -0.01) debtors.push({ id: f.id, net: -net });
+    else if (net > 0.01) creditors.push({ id: f.id, net });
+  });
+  debtors.sort((a, b) => b.net - a.net);
+  creditors.sort((a, b) => b.net - a.net);
+
+  const optimized = [];
+  let oi = 0;
+  let oj = 0;
+  while (oi < debtors.length && oj < creditors.length) {
+    const deb = debtors[oi];
+    const cred = creditors[oj];
+    const amount = Math.min(deb.net, cred.net);
+    if (amount > 0.01) {
+      optimized.push({ fromId: deb.id, toId: cred.id, amount });
+    }
+    deb.net -= amount;
+    cred.net -= amount;
+    if (deb.net <= 0.01) oi++;
+    if (cred.net <= 0.01) oj++;
+  }
+
   return {
     totalSpentBase: total,
     categoryBreakdown: catMap,
     settlements: transfers,
+    settlementsOptimized: optimized,
     members,
   };
 }

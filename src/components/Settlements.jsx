@@ -1,14 +1,22 @@
+import { useState } from "react";
 import MemberBalances from "./MemberBalances.jsx";
 
-// Sección desplegable de deudas: saldo por integrante + transferencias mínimas.
+// Sección desplegable de deudas: saldo por integrante + dos vistas de pagos.
 export default function Settlements({
   settlements,
+  settlementsOptimized = [],
   members,
   getFriend,
   baseCurrency,
   onSettle,
   onCopyAlias,
 }) {
+  // "directo" = deuda real por persona (se pueden marcar pagos).
+  // "optimizado" = menos transferencias (solo informativo).
+  const [mode, setMode] = useState("directo");
+
+  const list = mode === "directo" ? settlements : settlementsOptimized;
+
   return (
     <details
       open
@@ -30,12 +38,58 @@ export default function Settlements({
         </h3>
         <MemberBalances members={members} baseCurrency={baseCurrency} />
 
-        {/* Transferencias sugeridas */}
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mt-5 mb-2">
-          Quién le paga a quién en {baseCurrency}
-        </h3>
+        {/* Selector de vista */}
+        <div className="flex items-center gap-1.5 mt-5 mb-3 bg-slate-950 border border-slate-800 rounded-xl p-1 w-full sm:w-fit">
+          <button
+            type="button"
+            onClick={() => setMode("directo")}
+            className={`flex-1 sm:flex-none text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+              mode === "directo"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Deuda real
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("optimizado")}
+            className={`flex-1 sm:flex-none text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors ${
+              mode === "optimizado"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            Menos transferencias
+          </button>
+        </div>
 
-        {settlements.length === 0 ? (
+        <p className="text-[11px] text-slate-400 mb-3">
+          {mode === "directo" ? (
+            <>
+              Cada uno le paga directamente a quien le debe según los gastos
+              compartidos. <strong className="text-slate-300">{list.length}</strong>{" "}
+              {list.length === 1 ? "pago" : "pagos"}.
+            </>
+          ) : (
+            <>
+              Menos pagos para saldar todo. Nadie paga de más: cada uno paga
+              exactamente su saldo, pero puede tocarte pagarle a alguien con quien
+              no compartiste un gasto puntual.{" "}
+              <strong className="text-slate-300">{list.length}</strong>{" "}
+              {list.length === 1 ? "pago" : "pagos"}.
+            </>
+          )}
+        </p>
+
+        {mode === "optimizado" && list.length > 0 && (
+          <p className="text-[10px] text-amber-300/90 bg-amber-950/20 border border-amber-800/30 rounded-lg px-2.5 py-1.5 mb-3">
+            ℹ️ Vista informativa. Para registrar un pago como hecho, usá la vista
+            “Deuda real”.
+          </p>
+        )}
+
+        {list.length === 0 ? (
           <div className="bg-emerald-950/20 border border-emerald-800/40 p-4 rounded-xl text-center">
             <span className="text-2xl block mb-1">🎉</span>
             <p className="text-xs text-emerald-300 font-medium">
@@ -44,7 +98,7 @@ export default function Settlements({
           </div>
         ) : (
           <ul className="space-y-2.5">
-            {settlements.map((s, idx) => {
+            {list.map((s, idx) => {
               const from = getFriend(s.fromId);
               const to = getFriend(s.toId);
               const alias = to?.alias?.trim();
@@ -87,13 +141,15 @@ export default function Settlements({
                       </button>
                     ) : null}
 
-                    <button
-                      type="button"
-                      onClick={() => onSettle(s)}
-                      className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
-                    >
-                      <span>✓</span> Marcar como pagado
-                    </button>
+                    {mode === "directo" && (
+                      <button
+                        type="button"
+                        onClick={() => onSettle(s)}
+                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-1"
+                      >
+                        <span>✓</span> Marcar como pagado
+                      </button>
+                    )}
                   </div>
                 </li>
               );
